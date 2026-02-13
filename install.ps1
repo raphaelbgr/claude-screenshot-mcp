@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # Claude Screenshot MCP - Windows Installer
 # ============================================================
 # Run with:  powershell -ExecutionPolicy Bypass -File install.ps1
@@ -136,24 +136,27 @@ Write-Step 2 $totalSteps "Installing claude-screenshot-mcp..."
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $scriptDir
 
-try {
-    & $pythonCmd -m pip install -e ".[all]" 2>&1 | ForEach-Object {
-        if ($_ -match "error|ERROR|Error") {
-            Write-Host "  $_" -ForegroundColor Red
-        } elseif ($_ -match "Successfully") {
-            Write-Host "  $_" -ForegroundColor Green
-        }
+$prevErrorPref = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$pipOutput = & $pythonCmd -m pip install -e ".[all]" 2>&1
+$pipExitCode = $LASTEXITCODE
+$ErrorActionPreference = $prevErrorPref
+
+foreach ($line in $pipOutput) {
+    $lineStr = "$line"
+    if ($lineStr -match "error|ERROR|Error") {
+        Write-Host "  $lineStr" -ForegroundColor Red
+    } elseif ($lineStr -match "Successfully") {
+        Write-Host "  $lineStr" -ForegroundColor Green
     }
-    if ($LASTEXITCODE -ne 0) {
-        throw "pip install failed"
-    }
-    Write-Check "Package" "OK" "Installed successfully"
-} catch {
-    Write-Check "Package" "FAIL" "Installation failed: $_"
+}
+if ($pipExitCode -ne 0) {
+    Write-Check "Package" "FAIL" "pip install failed with exit code $pipExitCode"
     Pop-Location
     Read-Host "  Press Enter to exit"
     exit 1
 }
+Write-Check "Package" "OK" "Installed successfully"
 
 Pop-Location
 
