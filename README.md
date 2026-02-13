@@ -12,7 +12,7 @@ A screen capture plugin for [Claude Code](https://docs.claude.com/en/docs/claude
 
 ## Features
 
-- **Global hotkey** (default `Ctrl+Alt+Shift+S`) triggers a screen region selector
+- **Global hotkey** (default `Ctrl+Shift+Q`) triggers a screen region selector
 - **Click and drag** to select any area -- the file path is copied to your clipboard
 - **ESC or right-click** to cancel at any time
 - **Configurable** hotkey, save directory, image format, overlay appearance
@@ -64,7 +64,7 @@ You'll see:
 ```
   Claude Screenshot Daemon
   ========================
-  Hotkey:  ctrl+alt+shift+s
+  Hotkey:  ctrl+shift+q
   Status:  Listening...
 
   Press the hotkey to capture a screen region.
@@ -118,7 +118,7 @@ Settings are stored in a JSON file:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `hotkey` | `ctrl+alt+shift+s` | Global hotkey combination |
+| `hotkey` | `ctrl+shift+q` | Global hotkey combination |
 | `save_directory` | System temp folder | Where screenshots are saved |
 | `image_format` | `png` | Image format (`png`, `jpg`, `webp`) |
 | `copy_path_to_clipboard` | `true` | Auto-copy file path to clipboard |

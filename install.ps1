@@ -291,7 +291,7 @@ Write-Host ""
 Write-Host "    1. Start the hotkey daemon:" -ForegroundColor Gray
 Write-Host "       claude-screenshot-daemon" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "    2. Press Ctrl+Alt+Shift+S to capture a region" -ForegroundColor Gray
+Write-Host "    2. Press Ctrl+Shift+Q to capture a region" -ForegroundColor Gray
 Write-Host ""
 Write-Host "    3. Paste the file path into Claude Code with Ctrl+V" -ForegroundColor Gray
 Write-Host ""

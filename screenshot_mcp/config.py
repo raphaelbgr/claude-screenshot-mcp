@@ -14,7 +14,7 @@ from typing import Optional
 
 # Default configuration values
 DEFAULTS = {
-    "hotkey": "ctrl+alt+shift+s",
+    "hotkey": "ctrl+shift+q",
     "save_directory": "",  # Empty = use temp directory
     "image_format": "png",
     "show_notification": True,

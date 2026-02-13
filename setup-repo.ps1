@@ -73,7 +73,7 @@ Write-Host "  [3/5] Creating initial commit..." -ForegroundColor White
 git commit -m "Initial release: Claude Screenshot MCP plugin
 
 Screen capture plugin for Claude Code with:
-- Global hotkey daemon (Ctrl+Alt+Shift+S) for region capture
+- Global hotkey daemon (Ctrl+Shift+Q) for region capture
 - MCP server with 6 tools for Claude Code integration
 - Cross-platform support (Windows, macOS, Linux)
 - Configurable hotkey, save directory, image format

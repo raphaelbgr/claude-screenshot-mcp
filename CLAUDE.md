@@ -30,7 +30,7 @@ Start-Process -NoNewWindow claude-screenshot-daemon
 
 - The daemon uses a PID lock file to prevent duplicate instances. Only one daemon
   runs at a time. If `--status` says it's running, do NOT start another one.
-- The daemon listens for a global hotkey (default: `Ctrl+Alt+Shift+S`) and opens
+- The daemon listens for a global hotkey (default: `Ctrl+Shift+Q`) and opens
   a region selector overlay. The captured screenshot path is copied to clipboard.
 - The user pastes the path into Claude Code with `Ctrl+V`.
 - If the daemon crashes or the PID file is stale, use `--force` to override:
@@ -38,7 +38,7 @@ Start-Process -NoNewWindow claude-screenshot-daemon
 
 ### Default hotkey
 
-`Ctrl+Alt+Shift+S` — configurable via `claude-screenshot-daemon --set-hotkey <combo>`
+`Ctrl+Shift+Q` — configurable via `claude-screenshot-daemon --set-hotkey <combo>`
 
 ### Troubleshooting
 
