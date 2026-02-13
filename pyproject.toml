@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-screenshot-mcp"
+version = "0.1.0"
+description = "Screen capture MCP plugin for Claude Code - hotkey-triggered region selection screenshots"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Raphael", email = "raphaelbgr@gmail.com"},
+]
+keywords = ["claude", "mcp", "screenshot", "screen-capture", "claude-code"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics :: Capture :: Screen Capture",
+    "Topic :: Software Development :: Libraries",
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "mss>=9.0.0",
+    "Pillow>=10.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+hotkey = [
+    "pynput>=1.7.6",
+]
+all = [
+    "pynput>=1.7.6",
+]
+
+[project.scripts]
+claude-screenshot-server = "screenshot_mcp.server:main"
+claude-screenshot-daemon = "screenshot_mcp.daemon:main"
+
+[project.urls]
+Homepage = "https://github.com/raphaelbgr/claude-screenshot-mcp"
+Repository = "https://github.com/raphaelbgr/claude-screenshot-mcp"
+Issues = "https://github.com/raphaelbgr/claude-screenshot-mcp/issues"
+
+[tool.setuptools.packages.find]
+include = ["screenshot_mcp*"]
