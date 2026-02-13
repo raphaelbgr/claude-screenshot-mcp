@@ -18,11 +18,12 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, ConfigDict
 
-from .config import load_config, update_config, get_screenshots_dir, DEFAULTS
+from .config import load_config, update_config, get_screenshots_dir, save_last_region, load_last_region, DEFAULTS
 from .capture import (
     select_region_and_capture,
     capture_full_screen,
     capture_region,
+    recapture_region,
     save_screenshot,
     copy_to_clipboard,
 )
@@ -114,6 +115,21 @@ class GetLatestInput(BaseModel):
     )
 
 
+class RecaptureRegionInput(BaseModel):
+    """Input for recapturing the last selected region."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    save_directory: Optional[str] = Field(
+        default=None,
+        description="Directory to save the screenshot. If not specified, uses the configured default.",
+    )
+    filename: Optional[str] = Field(
+        default=None,
+        description="Custom filename for the screenshot.",
+    )
+
+
 # ──────────────────────────────────────────────
 # Tools
 # ──────────────────────────────────────────────
@@ -182,12 +198,21 @@ async def screenshot_capture_region(params: CaptureRegionInput) -> str:
                 "message": f"Capture process failed: {proc.stderr.strip()}",
             })
 
-        path = proc.stdout.strip()
+        output_lines = proc.stdout.strip().split("\n")
+        path = output_lines[0].strip() if output_lines else ""
         if not path or path == "None" or path == "CANCELLED":
             return json.dumps({
                 "status": "cancelled",
                 "message": "Selection was cancelled by the user.",
             })
+
+        # Parse and save region coordinates if available
+        if len(output_lines) > 1 and output_lines[1].strip():
+            try:
+                region = json.loads(output_lines[1].strip())
+                save_last_region(region["x"], region["y"], region["width"], region["height"])
+            except (json.JSONDecodeError, KeyError):
+                pass
 
         # Optionally copy path to clipboard
         if config.get("copy_path_to_clipboard", True):
@@ -297,6 +322,125 @@ async def screenshot_capture_coordinates(params: CaptureCoordinatesInput) -> str
             "status": "ok",
             "path": path,
             "message": f"Region captured! Path: {path}",
+        })
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+@mcp.tool(
+    name="screenshot_recapture_region",
+    annotations={
+        "title": "Recapture Last Region",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+async def screenshot_recapture_region(params: RecaptureRegionInput) -> str:
+    """Re-capture the exact same screen region as the last interactive capture.
+
+    No overlay or user interaction needed -- instantly captures the previously
+    selected area. Useful for monitoring a specific area over time (build logs,
+    UI elements, terminal output).
+
+    If no previous region exists, automatically falls back to the interactive
+    region selector so the user can pick an area. That selected area is saved
+    and subsequent calls will recapture it instantly.
+
+    Args:
+        params (RecaptureRegionInput): Parameters containing:
+            - save_directory (Optional[str]): Where to save the screenshot
+            - filename (Optional[str]): Custom filename
+
+    Returns:
+        str: JSON with the file path of the captured screenshot, or error message.
+
+        Success: {"status": "ok", "path": "...", "region": {...}, "message": "..."}
+        Fallback: Opens interactive selector, then returns the same success format
+        Cancelled: {"status": "cancelled", "message": "..."}
+        Error: {"status": "error", "message": "..."}
+    """
+    try:
+        config = load_config()
+        save_dir = params.save_directory or config["save_directory"]
+        fmt = config.get("image_format", "png")
+
+        region = load_last_region()
+
+        if region is None:
+            # No previous region -- fall back to interactive selector
+            capture_script = _build_capture_command(save_dir, config)
+            proc = subprocess.run(
+                [sys.executable, "-c", capture_script],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+
+            if proc.returncode != 0:
+                return json.dumps({
+                    "status": "error",
+                    "message": f"Capture process failed: {proc.stderr.strip()}",
+                })
+
+            output_lines = proc.stdout.strip().split("\n")
+            path = output_lines[0].strip() if output_lines else ""
+            if not path or path == "None" or path == "CANCELLED":
+                return json.dumps({
+                    "status": "cancelled",
+                    "message": "Selection was cancelled by the user.",
+                })
+
+            # Parse and save region for next recapture
+            fallback_region = None
+            if len(output_lines) > 1 and output_lines[1].strip():
+                try:
+                    fallback_region = json.loads(output_lines[1].strip())
+                    save_last_region(
+                        fallback_region["x"], fallback_region["y"],
+                        fallback_region["width"], fallback_region["height"],
+                    )
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            if config.get("copy_path_to_clipboard", True):
+                copy_to_clipboard(path)
+
+            return json.dumps({
+                "status": "ok",
+                "path": path,
+                "region": fallback_region,
+                "fallback": True,
+                "message": (
+                    f"No previous region found — opened interactive selector. "
+                    f"Region saved for future recaptures. Path: {path}"
+                ),
+            })
+
+        # Happy path: recapture the saved region instantly
+        path = recapture_region(
+            x=region["x"],
+            y=region["y"],
+            width=region["width"],
+            height=region["height"],
+            save_dir=save_dir,
+            fmt=fmt,
+        )
+
+        if config.get("copy_path_to_clipboard", True):
+            copy_to_clipboard(path)
+
+        return json.dumps({
+            "status": "ok",
+            "path": path,
+            "region": region,
+            "message": f"Region recaptured! Path: {path}",
+        })
+    except subprocess.TimeoutExpired:
+        return json.dumps({
+            "status": "error",
+            "message": "Region selection timed out after 120 seconds.",
         })
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)})
@@ -438,6 +582,10 @@ def _build_capture_command(save_dir: str, config: dict) -> str:
 
     This is needed because tkinter requires the main thread and the MCP
     server runs async, so we launch capture in a separate process.
+
+    Output format (two lines):
+        Line 1: file path (or 'CANCELLED')
+        Line 2: JSON region dict (or empty)
     """
     fmt = config.get("image_format", "png")
     color = config.get("overlay_color", "#00aaff")
@@ -445,6 +593,7 @@ def _build_capture_command(save_dir: str, config: dict) -> str:
 
     return f"""
 import sys
+import json
 sys.path.insert(0, r'{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}')
 from screenshot_mcp.capture import select_region_and_capture
 result = select_region_and_capture(
@@ -453,7 +602,11 @@ result = select_region_and_capture(
     overlay_color='{color}',
     overlay_opacity={opacity},
 )
-print(result if result else 'CANCELLED')
+if result.path:
+    print(result.path)
+    print(json.dumps(result.region) if result.region else '')
+else:
+    print('CANCELLED')
 """
 
 

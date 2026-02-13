@@ -11,8 +11,15 @@ import os
 import sys
 import subprocess
 import tempfile
+from collections import namedtuple
 from pathlib import Path
 from typing import Optional, Tuple
+
+
+# Result returned by select_region_and_capture
+# path: str - file path of saved screenshot (or None if cancelled)
+# region: dict - {"x": int, "y": int, "width": int, "height": int} (or None)
+CaptureResult = namedtuple("CaptureResult", ["path", "region"])
 
 # We use mss for fast multi-monitor screen capture
 # and Pillow for image processing/cropping
@@ -107,7 +114,7 @@ def select_region_and_capture(
     fmt: str = "png",
     overlay_color: str = "#00aaff",
     overlay_opacity: float = 0.3,
-) -> Optional[str]:
+) -> CaptureResult:
     """Launch interactive region selector overlay, capture the selected area.
 
     Opens a transparent fullscreen overlay. User clicks and drags to select
@@ -122,14 +129,14 @@ def select_region_and_capture(
         overlay_opacity: Opacity of the dimmed overlay
 
     Returns:
-        File path of the saved screenshot, or None if cancelled
+        CaptureResult with path and region, or CaptureResult(None, None) if cancelled
     """
     _ensure_dependencies()
 
     # Import tkinter here to avoid issues when running as MCP server
     import tkinter as tk
 
-    result = {"path": None}
+    result = {"path": None, "region": None}
 
     # First, take a screenshot of the entire screen BEFORE showing the overlay
     # This way the overlay itself won't appear in the final capture
@@ -210,6 +217,7 @@ def select_region_and_capture(
         # Crop the pre-captured full screenshot
         cropped = full_screenshot.crop((x1, y1, x2, y2))
         result["path"] = save_screenshot(cropped, save_dir=save_dir, fmt=fmt)
+        result["region"] = {"x": x1, "y": y1, "width": width, "height": height}
 
     def on_escape(event):
         root.grab_release()
@@ -227,7 +235,34 @@ def select_region_and_capture(
     root.bind("<ButtonPress-3>", on_right_click)
 
     root.mainloop()
-    return result["path"]
+    return CaptureResult(path=result["path"], region=result["region"])
+
+
+def recapture_region(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    save_dir: Optional[str] = None,
+    fmt: str = "png",
+) -> str:
+    """Capture a specific screen region without any overlay.
+
+    Convenience wrapper around capture_region() + save_screenshot().
+
+    Args:
+        x: Left coordinate
+        y: Top coordinate
+        width: Width of the region
+        height: Height of the region
+        save_dir: Directory to save to (default: temp dir)
+        fmt: Image format
+
+    Returns:
+        Absolute path to the saved screenshot file
+    """
+    image = capture_region(x, y, width, height)
+    return save_screenshot(image, save_dir=save_dir, fmt=fmt)
 
 
 def copy_to_clipboard(text: str) -> bool:

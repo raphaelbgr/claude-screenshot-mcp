@@ -13,9 +13,10 @@ A screen capture plugin for [Claude Code](https://docs.claude.com/en/docs/claude
 ## Features
 
 - **Global hotkey** (default `Ctrl+Shift+Q`) triggers a screen region selector
+- **Recapture hotkey** (default `Ctrl+Alt+Q`) instantly re-captures the last selected region -- no overlay, no interaction
 - **Click and drag** to select any area -- the file path is copied to your clipboard
 - **ESC or right-click** to cancel at any time
-- **Configurable** hotkey, save directory, image format, overlay appearance
+- **Configurable** hotkeys, save directory, image format, overlay appearance
 - **MCP integration** -- Claude Code can also trigger captures directly via tools
 - **Cross-platform** -- Windows, macOS, Linux
 - **No overlay in screenshots** -- the screen is captured before the overlay appears
@@ -64,10 +65,12 @@ You'll see:
 ```
   Claude Screenshot Daemon
   ========================
-  Hotkey:  ctrl+shift+q
+  Capture hotkey:    ctrl+shift+q
+  Recapture hotkey:  ctrl+alt+q
   Status:  Listening...
 
-  Press the hotkey to capture a screen region.
+  Press the capture hotkey to select a screen region.
+  Press the recapture hotkey to re-capture the last region.
   Press ESC during capture to cancel.
   Right-click during capture to cancel.
   The file path will be copied to your clipboard.
@@ -118,7 +121,8 @@ Settings are stored in a JSON file:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `hotkey` | `ctrl+shift+q` | Global hotkey combination |
+| `hotkey` | `ctrl+shift+q` | Capture hotkey combination |
+| `recapture_hotkey` | `ctrl+alt+q` | Recapture last region hotkey |
 | `save_directory` | System temp folder | Where screenshots are saved |
 | `image_format` | `png` | Image format (`png`, `jpg`, `webp`) |
 | `copy_path_to_clipboard` | `true` | Auto-copy file path to clipboard |
@@ -135,14 +139,19 @@ When registered as an MCP server, Claude Code gets these tools:
 | Tool | Description |
 |------|-------------|
 | `screenshot_capture_region` | Interactive region selector -- click and drag to capture |
+| `screenshot_recapture_region` | Re-capture the last selected region instantly (no overlay). If no previous region exists, falls back to the interactive selector automatically |
 | `screenshot_capture_fullscreen` | Capture the entire screen (all monitors) |
 | `screenshot_capture_coordinates` | Capture a specific region by x, y, width, height |
 | `screenshot_get_latest` | Get paths to the most recent screenshots |
 | `screenshot_get_config` | View current plugin configuration |
 | `screenshot_update_config` | Update a configuration setting |
 
+The `screenshot_recapture_region` tool is especially useful for LLMs that need to monitor the same screen area repeatedly (e.g., watching a build log, checking a UI change, or verifying terminal output). Call it once to select the area interactively, then call it again to instantly re-capture the same coordinates -- no user interaction needed.
+
 In Claude Code, just ask naturally:
 - "Take a screenshot of a region on my screen"
+- "Recapture the same region again"
+- "Keep checking that area of the screen"
 - "Capture my full screen"
 - "Show me my latest screenshots"
 - "Change my screenshot hotkey to ctrl+alt+p"

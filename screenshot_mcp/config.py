@@ -15,6 +15,7 @@ from typing import Optional
 # Default configuration values
 DEFAULTS = {
     "hotkey": "ctrl+shift+q",
+    "recapture_hotkey": "ctrl+alt+q",
     "save_directory": "",  # Empty = use temp directory
     "image_format": "png",
     "show_notification": True,
@@ -91,3 +92,46 @@ def update_config(key: str, value) -> dict:
     else:
         raise ValueError(f"Unknown config key: {key}. Valid keys: {list(DEFAULTS.keys())}")
     return config
+
+
+def _get_last_region_path() -> Path:
+    """Get the path to the last_region.json file."""
+    return get_config_dir() / "last_region.json"
+
+
+def save_last_region(x: int, y: int, width: int, height: int) -> None:
+    """Save the last captured region coordinates to disk."""
+    region_path = _get_last_region_path()
+    try:
+        with open(region_path, "w") as f:
+            json.dump({"x": x, "y": y, "width": width, "height": height}, f)
+    except IOError as e:
+        print(f"Warning: Could not save last region to {region_path}: {e}", file=sys.stderr)
+
+
+def load_last_region() -> Optional[dict]:
+    """Load the last captured region coordinates from disk.
+
+    Returns:
+        Dict with x, y, width, height keys, or None if not available.
+    """
+    region_path = _get_last_region_path()
+    if not region_path.exists():
+        return None
+
+    try:
+        with open(region_path, "r") as f:
+            data = json.load(f)
+        # Validate required keys
+        required = {"x", "y", "width", "height"}
+        if not required.issubset(data.keys()):
+            return None
+        # Validate values are positive integers
+        for key in required:
+            if not isinstance(data[key], int) or data[key] < 0:
+                return None
+        if data["width"] < 1 or data["height"] < 1:
+            return None
+        return data
+    except (json.JSONDecodeError, IOError, ValueError):
+        return None

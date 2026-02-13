@@ -27,8 +27,8 @@ import time
 import subprocess
 from pathlib import Path
 
-from .config import load_config, update_config, get_config_path, get_config_dir
-from .capture import select_region_and_capture, copy_to_clipboard
+from .config import load_config, update_config, get_config_path, get_config_dir, save_last_region, load_last_region
+from .capture import select_region_and_capture, recapture_region, copy_to_clipboard
 
 
 # ──────────────────────────────────────────────
@@ -219,29 +219,33 @@ def _show_notification(title: str, message: str):
         pass
 
 
-def _show_tray_info(hotkey: str, debug: bool = False):
+def _show_tray_info(hotkey: str, recapture_hotkey: str, debug: bool = False):
     """Print hotkey info to stderr (visible in terminal)."""
     print("", file=sys.stderr)
     print("  Claude Screenshot Daemon", file=sys.stderr)
     print("  ========================", file=sys.stderr)
-    print(f"  Hotkey:  {hotkey}", file=sys.stderr)
+    print(f"  Capture hotkey:    {hotkey}", file=sys.stderr)
+    print(f"  Recapture hotkey:  {recapture_hotkey}", file=sys.stderr)
     print(f"  Config:  {get_config_path()}", file=sys.stderr)
     print(f"  Status:  Listening...", file=sys.stderr)
     if debug:
         print("  Mode:    DEBUG (showing all key presses)", file=sys.stderr)
     print("", file=sys.stderr)
-    print("  Press the hotkey to capture a screen region.", file=sys.stderr)
+    print("  Press the capture hotkey to select a screen region.", file=sys.stderr)
+    print("  Press the recapture hotkey to re-capture the last region.", file=sys.stderr)
     print("  Press ESC during capture to cancel.", file=sys.stderr)
     print("  Right-click during capture to cancel.", file=sys.stderr)
     print("  The file path will be copied to your clipboard.", file=sys.stderr)
     print("  Press Ctrl+C to stop the daemon.", file=sys.stderr)
     print("", file=sys.stderr)
-    print(f"  Change hotkey:  claude-screenshot-daemon --set-hotkey ctrl+alt+s", file=sys.stderr)
+    print(f"  Change hotkeys:", file=sys.stderr)
+    print(f"    claude-screenshot-daemon --set-hotkey ctrl+alt+s", file=sys.stderr)
+    print(f"    claude-screenshot-daemon --set-recapture-hotkey ctrl+alt+r", file=sys.stderr)
     print("", file=sys.stderr)
 
 
 def _on_hotkey_triggered(config: dict):
-    """Called when the hotkey is pressed."""
+    """Called when the capture hotkey is pressed."""
     print("  >> Hotkey triggered! Opening region selector...", file=sys.stderr)
 
     save_dir = config["save_directory"]
@@ -249,31 +253,76 @@ def _on_hotkey_triggered(config: dict):
     overlay_color = config.get("overlay_color", "#00aaff")
     overlay_opacity = config.get("overlay_opacity", 0.3)
 
-    path = select_region_and_capture(
+    capture_result = select_region_and_capture(
         save_dir=save_dir,
         fmt=fmt,
         overlay_color=overlay_color,
         overlay_opacity=overlay_opacity,
     )
 
-    if path:
+    if capture_result.path:
+        # Save region for recapture
+        if capture_result.region:
+            r = capture_result.region
+            save_last_region(r["x"], r["y"], r["width"], r["height"])
+
         if config.get("copy_path_to_clipboard", True):
-            copy_to_clipboard(path)
-            print(f"  >> Captured: {path}", file=sys.stderr)
+            copy_to_clipboard(capture_result.path)
+            print(f"  >> Captured: {capture_result.path}", file=sys.stderr)
             print(f"  >> Path copied to clipboard! Paste into Claude Code with Ctrl+V", file=sys.stderr)
         else:
-            print(f"  >> Captured: {path}", file=sys.stderr)
+            print(f"  >> Captured: {capture_result.path}", file=sys.stderr)
 
         if config.get("show_notification", True):
             _show_notification(
                 "Claude Screenshot",
-                f"Saved! Path copied to clipboard.\n{os.path.basename(path)}",
+                f"Saved! Path copied to clipboard.\n{os.path.basename(capture_result.path)}",
             )
     else:
         print("  >> Capture cancelled (ESC / right-click / region too small).", file=sys.stderr)
 
 
-def run_daemon(hotkey_override: str = None, debug: bool = False, skip_lock: bool = False):
+def _on_recapture_triggered(config: dict):
+    """Called when the recapture hotkey is pressed."""
+    region = load_last_region()
+    if region is None:
+        print("  >> No previous region saved. Falling back to interactive selector...", file=sys.stderr)
+        _on_hotkey_triggered(config)
+        return
+
+    print(f"  >> Recapturing region: x={region['x']}, y={region['y']}, "
+          f"{region['width']}x{region['height']}...", file=sys.stderr)
+
+    save_dir = config["save_directory"]
+    fmt = config.get("image_format", "png")
+
+    try:
+        path = recapture_region(
+            x=region["x"],
+            y=region["y"],
+            width=region["width"],
+            height=region["height"],
+            save_dir=save_dir,
+            fmt=fmt,
+        )
+
+        if config.get("copy_path_to_clipboard", True):
+            copy_to_clipboard(path)
+            print(f"  >> Recaptured: {path}", file=sys.stderr)
+            print(f"  >> Path copied to clipboard! Paste into Claude Code with Ctrl+V", file=sys.stderr)
+        else:
+            print(f"  >> Recaptured: {path}", file=sys.stderr)
+
+        if config.get("show_notification", True):
+            _show_notification(
+                "Claude Screenshot",
+                f"Recaptured! Path copied to clipboard.\n{os.path.basename(path)}",
+            )
+    except Exception as e:
+        print(f"  >> Recapture failed: {e}", file=sys.stderr)
+
+
+def run_daemon(hotkey_override: str = None, recapture_hotkey_override: str = None, debug: bool = False, skip_lock: bool = False):
     """Main daemon entry point. Uses pynput for global hotkey listening."""
     # Instance lock — prevent multiple daemons
     if not skip_lock:
@@ -284,9 +333,10 @@ def run_daemon(hotkey_override: str = None, debug: bool = False, skip_lock: bool
             sys.exit(0)
 
     config = load_config()
-    hotkey = hotkey_override or config.get("hotkey", "ctrl+shift+s")
+    hotkey = hotkey_override or config.get("hotkey", "ctrl+shift+q")
+    recapture_hotkey = recapture_hotkey_override or config.get("recapture_hotkey", "ctrl+alt+q")
 
-    _show_tray_info(hotkey, debug=debug)
+    _show_tray_info(hotkey, recapture_hotkey, debug=debug)
 
     try:
         from pynput import keyboard as pynput_keyboard
@@ -298,14 +348,24 @@ def run_daemon(hotkey_override: str = None, debug: bool = False, skip_lock: bool
         )
         sys.exit(1)
 
-    # Parse the hotkey string into normalized key names
+    # Parse both hotkey strings into normalized key names
     hotkey_names = _parse_hotkey_string(hotkey)
-    print(f"  Listening for keys: {hotkey_names}", file=sys.stderr)
+    recapture_hotkey_names = _parse_hotkey_string(recapture_hotkey)
+    print(f"  Listening for capture keys:    {hotkey_names}", file=sys.stderr)
+    print(f"  Listening for recapture keys:  {recapture_hotkey_names}", file=sys.stderr)
     print("", file=sys.stderr)
 
     # Track currently pressed normalized key names
     current_keys = set()
     capturing = False
+
+    # Sort hotkeys by length (longer first) to avoid subset collisions
+    # e.g., ctrl+alt+q should be checked before ctrl+q
+    hotkey_actions = [
+        (hotkey_names, _on_hotkey_triggered),
+        (recapture_hotkey_names, _on_recapture_triggered),
+    ]
+    hotkey_actions.sort(key=lambda pair: len(pair[0]), reverse=True)
 
     def on_press(key):
         nonlocal capturing
@@ -318,14 +378,16 @@ def run_daemon(hotkey_override: str = None, debug: bool = False, skip_lock: bool
         if debug:
             print(f"  [debug] pressed: {key} -> normalized: '{normalized}' | active: {current_keys}", file=sys.stderr)
 
-        # Check if all hotkey keys are currently pressed
-        if hotkey_names.issubset(current_keys):
-            capturing = True
-            current_keys.clear()
+        # Check hotkeys (longer combos first to avoid subset collisions)
+        for keys, handler in hotkey_actions:
+            if keys.issubset(current_keys):
+                capturing = True
+                current_keys.clear()
 
-            current_config = load_config()
-            _on_hotkey_triggered(current_config)
-            capturing = False
+                current_config = load_config()
+                handler(current_config)
+                capturing = False
+                break
 
     def on_release(key):
         normalized = _normalize_key(key)
@@ -365,24 +427,37 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  claude-screenshot-daemon                          Use default hotkey
-  claude-screenshot-daemon --hotkey ctrl+alt+p      Use custom hotkey (this session only)
-  claude-screenshot-daemon --hotkey f9              Single key hotkey
-  claude-screenshot-daemon --set-hotkey ctrl+alt+s  Save hotkey to config and start
-  claude-screenshot-daemon --debug                  Show key presses for troubleshooting
+  claude-screenshot-daemon                                  Use default hotkeys
+  claude-screenshot-daemon --hotkey ctrl+alt+p              Custom capture hotkey (session only)
+  claude-screenshot-daemon --recapture-hotkey ctrl+alt+r    Custom recapture hotkey (session only)
+  claude-screenshot-daemon --set-hotkey ctrl+alt+s          Save capture hotkey to config
+  claude-screenshot-daemon --set-recapture-hotkey ctrl+alt+r  Save recapture hotkey to config
+  claude-screenshot-daemon --debug                          Show key presses for troubleshooting
         """,
     )
     parser.add_argument(
         "--hotkey",
         type=str,
         default=None,
-        help="Hotkey combo for this session (e.g., ctrl+shift+s, ctrl+alt+p, f9)",
+        help="Capture hotkey combo for this session (e.g., ctrl+shift+q, ctrl+alt+p, f9)",
     )
     parser.add_argument(
         "--set-hotkey",
         type=str,
         default=None,
-        help="Save a new default hotkey to config and start the daemon",
+        help="Save a new default capture hotkey to config and start the daemon",
+    )
+    parser.add_argument(
+        "--recapture-hotkey",
+        type=str,
+        default=None,
+        help="Recapture hotkey combo for this session (e.g., ctrl+alt+q)",
+    )
+    parser.add_argument(
+        "--set-recapture-hotkey",
+        type=str,
+        default=None,
+        help="Save a new default recapture hotkey to config and start the daemon",
     )
     parser.add_argument(
         "--debug",
@@ -417,10 +492,15 @@ Examples:
     # If --set-hotkey, save it to config first
     if args.set_hotkey:
         update_config("hotkey", args.set_hotkey)
-        print(f"  Hotkey saved to config: {args.set_hotkey}", file=sys.stderr)
+        print(f"  Capture hotkey saved to config: {args.set_hotkey}", file=sys.stderr)
+
+    if args.set_recapture_hotkey:
+        update_config("recapture_hotkey", args.set_recapture_hotkey)
+        print(f"  Recapture hotkey saved to config: {args.set_recapture_hotkey}", file=sys.stderr)
 
     hotkey = args.hotkey or args.set_hotkey or None
-    run_daemon(hotkey_override=hotkey, debug=args.debug, skip_lock=args.force)
+    recapture_hotkey = args.recapture_hotkey or args.set_recapture_hotkey or None
+    run_daemon(hotkey_override=hotkey, recapture_hotkey_override=recapture_hotkey, debug=args.debug, skip_lock=args.force)
 
 
 if __name__ == "__main__":
