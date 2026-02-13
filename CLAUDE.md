@@ -13,8 +13,8 @@ Run this at the beginning of each session:
 claude-screenshot-daemon --status
 ```
 
-- If it prints "Daemon is running" — do nothing, it's already active.
-- If it prints "Daemon is not running" (exit code 1) — start it as a background process:
+- If it prints "Daemon is running" — inform the user: "Screenshot daemon is already running. Press Ctrl+Shift+Q to capture a screen region."
+- If it prints "Daemon is not running" (exit code 1) — start it as a background process and then inform the user: "Screenshot daemon started. Press Ctrl+Shift+Q to capture a screen region."
 
 ```bash
 claude-screenshot-daemon &
