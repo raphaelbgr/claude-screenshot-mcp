@@ -34,8 +34,15 @@ Start-Process -NoNewWindow claude-screenshot-daemon
   - `Ctrl+Shift+Q` — opens a region selector overlay. The captured screenshot path is copied to clipboard.
   - `Ctrl+Alt+Q` — instantly re-captures the last selected region (no overlay). Falls back to interactive selector if no previous region.
 - The user pastes the path into Claude Code with `Ctrl+V`.
-- If the daemon crashes or the PID file is stale, use `--force` to override:
-  `claude-screenshot-daemon --force &`
+- To restart the daemon safely (stops the verified old instance, then starts):
+  `claude-screenshot-daemon --restart`
+  On Windows (PowerShell):
+  `Start-Process -NoNewWindow claude-screenshot-daemon -ArgumentList '--restart'`
+- To stop the daemon: `claude-screenshot-daemon --stop`
+- `--force` and `--restart` both verify the process name before killing — they will
+  never touch unrelated processes.
+- **NEVER use `Stop-Process`, `taskkill`, or `kill` to stop the daemon.** Always use
+  `--restart` or `--stop` which verify the PID belongs to our daemon.
 
 ### Default hotkeys
 
@@ -70,7 +77,7 @@ This is a Python MCP server + hotkey daemon for screen capture. Key files:
 
 - `screenshot_mcp/server.py` — MCP server with 7 tools (capture region, recapture, fullscreen, etc.)
 - `screenshot_mcp/daemon.py` — Hotkey listener with instance lock
-- `screenshot_mcp/capture.py` — Screen capture + tkinter overlay
+- `screenshot_mcp/capture.py` — Screen capture + multi-monitor tkinter overlay
 - `screenshot_mcp/config.py` — JSON config management
 
 ## Tech stack

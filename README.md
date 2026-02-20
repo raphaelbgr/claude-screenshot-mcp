@@ -18,6 +18,7 @@ A screen capture plugin for [Claude Code](https://docs.claude.com/en/docs/claude
 - **ESC or right-click** to cancel at any time
 - **Configurable** hotkeys, save directory, image format, overlay appearance
 - **MCP integration** -- Claude Code can also trigger captures directly via tools
+- **Multi-monitor support** -- overlay spans all monitors, capture works on any screen
 - **Cross-platform** -- Windows, macOS, Linux
 - **No overlay in screenshots** -- the screen is captured before the overlay appears
 
@@ -99,6 +100,19 @@ claude-screenshot-daemon --hotkey ctrl+alt+p
 claude-screenshot-daemon --set-hotkey ctrl+alt+p
 ```
 
+### Restart / stop the daemon
+
+```bash
+# Safely restart (verifies process name before stopping the old instance):
+claude-screenshot-daemon --restart
+
+# Stop the daemon:
+claude-screenshot-daemon --stop
+
+# Check status:
+claude-screenshot-daemon --status
+```
+
 ### Debug mode
 
 If the hotkey isn't working, use debug mode to see what keys are being detected:
@@ -161,12 +175,15 @@ In Claude Code, just ask naturally:
 ## How It Works
 
 1. **Pre-capture**: The full screen is captured *before* the overlay appears, so the overlay never shows in screenshots
-2. **Overlay**: A transparent fullscreen `tkinter` window with crosshair cursor appears
-3. **Selection**: Click and drag to draw a blue selection rectangle
-4. **Crop & save**: The pre-captured image is cropped to the selected region and saved
-5. **Clipboard**: The file path is copied to clipboard via native OS commands
+2. **Overlay**: A transparent `tkinter` window spans all monitors using `overrideredirect` + explicit geometry (not `-fullscreen`, which only covers the primary monitor on Windows)
+3. **DPI awareness**: On Windows, per-monitor DPI awareness is enabled so tkinter coordinates match physical pixels on high-DPI displays
+4. **Selection**: Click and drag to draw a blue selection rectangle on any monitor
+5. **Crop & save**: The pre-captured image is cropped to the selected region (with coordinate offsets for multi-monitor layouts) and saved
+6. **Clipboard**: The file path is copied to clipboard via native OS commands
 
 The daemon uses `pynput` for global hotkey detection, with key normalization that handles left/right modifier variants and control character remapping (e.g., `Ctrl+S` sends `\x13` on Windows, which is correctly resolved to `s` via virtual key codes).
+
+The daemon uses a PID lock file with process name verification -- `--restart` and `--force` will only terminate a verified `claude-screenshot-daemon` process, never unrelated programs.
 
 ---
 

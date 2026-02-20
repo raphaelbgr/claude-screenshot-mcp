@@ -1,9 +1,9 @@
 """
 Screen capture module with region selection overlay.
 
-Provides a full-screen transparent overlay where the user can click and drag
-to select a rectangular region. The selected region is then captured as a
-screenshot and saved to disk.
+Provides a transparent overlay spanning ALL monitors where the user can click
+and drag to select a rectangular region. The selected region is then captured
+as a screenshot and saved to disk.
 """
 
 import datetime
@@ -33,6 +33,31 @@ try:
     from PIL import Image
 except ImportError:
     Image = None
+
+
+def _enable_dpi_awareness():
+    """Enable per-monitor DPI awareness on Windows.
+
+    This ensures tkinter coordinates match mss physical pixel coordinates,
+    which is critical for correct cropping on high-DPI displays.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        # Per-Monitor DPI Aware v2 (Windows 10 1703+)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            import ctypes
+            # Fallback: System DPI Aware
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
+# Call at module level, before any tkinter or mss usage
+_enable_dpi_awareness()
 
 
 def _ensure_dependencies():
@@ -114,19 +139,23 @@ def select_region_and_capture(
     fmt: str = "png",
     overlay_color: str = "#00aaff",
     overlay_opacity: float = 0.3,
+    capture_hotkey: Optional[str] = None,
+    recapture_hotkey: Optional[str] = None,
 ) -> CaptureResult:
     """Launch interactive region selector overlay, capture the selected area.
 
-    Opens a transparent fullscreen overlay. User clicks and drags to select
-    a region. On release, that region is captured and saved.
+    Opens a transparent overlay spanning all monitors. User clicks and drags
+    to select a region. On release, that region is captured and saved.
 
-    Press Escape to cancel.
+    Press Escape or right-click to cancel.
 
     Args:
         save_dir: Where to save the screenshot
         fmt: Image format
         overlay_color: Color of the selection rectangle
         overlay_opacity: Opacity of the dimmed overlay
+        capture_hotkey: Current capture hotkey string (shown in overlay)
+        recapture_hotkey: Current recapture hotkey string (shown in overlay)
 
     Returns:
         CaptureResult with path and region, or CaptureResult(None, None) if cancelled
@@ -142,29 +171,69 @@ def select_region_and_capture(
     # This way the overlay itself won't appear in the final capture
     full_screenshot = capture_full_screen()
 
+    # Get virtual screen geometry (all monitors combined) and individual monitors
+    with mss.mss() as sct:
+        vs = sct.monitors[0]  # 0 = entire virtual screen
+        individual_monitors = list(sct.monitors[1:])  # 1+ = individual monitors
+    vs_left, vs_top = vs["left"], vs["top"]
+    vs_width, vs_height = vs["width"], vs["height"]
+
     root = tk.Tk()
     root.title("Claude Screenshot - Select Region")
-    root.attributes("-fullscreen", True)
+
+    # Use overrideredirect + explicit geometry to span ALL monitors.
+    # -fullscreen only covers the primary monitor on Windows.
+    root.overrideredirect(True)
+    root.geometry(f"{vs_width}x{vs_height}+{vs_left}+{vs_top}")
     root.attributes("-topmost", True)
     root.attributes("-alpha", overlay_opacity)
     root.configure(bg="black")
     root.config(cursor="crosshair")
 
-    # Force the window to grab focus so ESC works immediately
+    # Force the window to grab focus so ESC works immediately.
+    # Re-grab after 100ms as some Windows versions drop focus from
+    # overrideredirect windows.
     root.focus_force()
     root.grab_set()
+    root.after(100, lambda: (root.focus_force(), root.grab_set()))
 
     canvas = tk.Canvas(root, highlightthickness=0, bg="black")
     canvas.pack(fill=tk.BOTH, expand=True)
 
-    # Add ESC hint text in the center
-    canvas.create_text(
-        root.winfo_screenwidth() // 2,
-        root.winfo_screenheight() // 2,
-        text="Click and drag to select a region  |  Press ESC to cancel",
-        fill="white",
-        font=("Arial", 16),
-    )
+    # Build instruction lines, including current hotkeys if provided
+    hotkey_line = ""
+    if capture_hotkey or recapture_hotkey:
+        parts = []
+        if capture_hotkey:
+            parts.append(f"Capture: {capture_hotkey.upper()}")
+        if recapture_hotkey:
+            parts.append(f"Recapture: {recapture_hotkey.upper()}")
+        hotkey_line = "  |  ".join(parts)
+
+    # Draw instruction text centered on each individual monitor
+    for mon in individual_monitors:
+        cx = (mon["left"] - vs_left) + mon["width"] // 2
+        cy = (mon["top"] - vs_top) + mon["height"] // 2
+        y_offset = -28 if hotkey_line else -16
+        canvas.create_text(
+            cx, cy + y_offset,
+            text="Click and drag to select a region",
+            fill="white",
+            font=("Arial", 18, "bold"),
+        )
+        canvas.create_text(
+            cx, cy + y_offset + 32,
+            text="Press ESC or right-click to cancel",
+            fill="#888888",
+            font=("Arial", 14),
+        )
+        if hotkey_line:
+            canvas.create_text(
+                cx, cy + y_offset + 58,
+                text=hotkey_line,
+                fill="#666666",
+                font=("Arial", 12),
+            )
 
     # State for drag selection
     state = {"start_x": 0, "start_y": 0, "rect_id": None, "selecting": False}
@@ -214,9 +283,16 @@ def select_region_and_capture(
             # Too small, treat as a cancelled selection
             return
 
-        # Crop the pre-captured full screenshot
-        cropped = full_screenshot.crop((x1, y1, x2, y2))
+        # Crop the pre-captured full screenshot.
+        # The full screenshot starts at pixel (0,0) but corresponds to
+        # screen coordinate (vs_left, vs_top). Convert screen-absolute
+        # coords to image coords for cropping.
+        cropped = full_screenshot.crop((
+            x1 - vs_left, y1 - vs_top,
+            x2 - vs_left, y2 - vs_top,
+        ))
         result["path"] = save_screenshot(cropped, save_dir=save_dir, fmt=fmt)
+        # Store screen-absolute coordinates (needed by mss.grab() in recapture)
         result["region"] = {"x": x1, "y": y1, "width": width, "height": height}
 
     def on_escape(event):

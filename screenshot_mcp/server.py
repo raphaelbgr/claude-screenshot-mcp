@@ -77,8 +77,8 @@ class CaptureCoordinatesInput(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    x: int = Field(..., description="Left coordinate of the region (pixels)", ge=0)
-    y: int = Field(..., description="Top coordinate of the region (pixels)", ge=0)
+    x: int = Field(..., description="Left coordinate of the region (pixels, can be negative for multi-monitor)")
+    y: int = Field(..., description="Top coordinate of the region (pixels, can be negative for multi-monitor)")
     width: int = Field(..., description="Width of the region (pixels)", ge=1)
     height: int = Field(..., description="Height of the region (pixels)", ge=1)
     save_directory: Optional[str] = Field(default=None, description="Directory to save the screenshot.")
@@ -590,6 +590,8 @@ def _build_capture_command(save_dir: str, config: dict) -> str:
     fmt = config.get("image_format", "png")
     color = config.get("overlay_color", "#00aaff")
     opacity = config.get("overlay_opacity", 0.3)
+    capture_hk = config.get("hotkey", "ctrl+shift+q")
+    recapture_hk = config.get("recapture_hotkey", "ctrl+alt+q")
 
     return f"""
 import sys
@@ -601,6 +603,8 @@ result = select_region_and_capture(
     fmt='{fmt}',
     overlay_color='{color}',
     overlay_opacity={opacity},
+    capture_hotkey='{capture_hk}',
+    recapture_hotkey='{recapture_hk}',
 )
 if result.path:
     print(result.path)

@@ -126,9 +126,10 @@ def load_last_region() -> Optional[dict]:
         required = {"x", "y", "width", "height"}
         if not required.issubset(data.keys()):
             return None
-        # Validate values are positive integers
+        # Validate values are integers. x/y can be negative (monitors
+        # left of or above the primary monitor have negative coordinates).
         for key in required:
-            if not isinstance(data[key], int) or data[key] < 0:
+            if not isinstance(data[key], int):
                 return None
         if data["width"] < 1 or data["height"] < 1:
             return None

@@ -35,15 +35,63 @@ from .capture import select_region_and_capture, recapture_region, copy_to_clipbo
 # Instance Lock (PID file)
 # ──────────────────────────────────────────────
 
+# The process name we expect to see for the daemon.
+_DAEMON_PROCESS_NAME = "claude-screenshot-daemon"
+
+
 def _get_pid_file() -> Path:
     """Get the path to the PID lock file."""
     return get_config_dir() / "daemon.pid"
 
 
+def _get_process_name(pid: int) -> str:
+    """Get the process name / command line for a PID. Returns '' if not found."""
+    try:
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=5,
+            )
+            # Output: "process_name.exe","pid","session","session#","mem"
+            for line in result.stdout.strip().splitlines():
+                if str(pid) in line:
+                    # Extract process name from first CSV field
+                    parts = line.strip().strip('"').split('","')
+                    if parts:
+                        return parts[0].lower()
+        else:
+            # Unix: read /proc/<pid>/comm or use ps
+            comm_path = Path(f"/proc/{pid}/comm")
+            if comm_path.exists():
+                return comm_path.read_text().strip().lower()
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "comm="],
+                capture_output=True, text=True, timeout=5,
+            )
+            return result.stdout.strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
+def _is_pid_our_daemon(pid: int) -> bool:
+    """Check if a PID belongs to a claude-screenshot-daemon process.
+
+    Verifies the process name contains 'claude-screenshot' or 'python'
+    (since the daemon runs as a Python script).
+    """
+    name = _get_process_name(pid)
+    if not name:
+        return False
+    # The daemon may appear as 'claude-screenshot-daemon', 'claude-screenshot-daemon.exe',
+    # or 'python.exe' / 'python3' (when run via python -m or script)
+    return ("claude-screenshot" in name or "python" in name)
+
+
 def _is_daemon_running() -> bool:
     """Check if another daemon instance is already running.
 
-    Returns True if a daemon is running, False otherwise.
+    Returns True if a verified daemon is running, False otherwise.
     Also cleans up stale PID files.
     """
     pid_file = _get_pid_file()
@@ -57,29 +105,71 @@ def _is_daemon_running() -> bool:
         if old_pid is None:
             return False
 
-        # Check if the process is actually running
-        if sys.platform == "win32":
-            # On Windows, use tasklist to check if PID exists
-            result = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {old_pid}", "/NH"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if str(old_pid) in result.stdout:
-                return True
-        else:
-            # On Unix, send signal 0 to check if process exists
-            try:
-                os.kill(old_pid, 0)
-                return True
-            except (OSError, ProcessLookupError):
-                pass
+        # Check if the process is actually running AND is our daemon
+        if _is_pid_our_daemon(old_pid):
+            return True
 
-        # PID file exists but process is dead — stale lock
+        # PID file exists but process is dead or not ours — stale lock
         pid_file.unlink(missing_ok=True)
         return False
 
     except (json.JSONDecodeError, IOError, ValueError):
         # Corrupt PID file — remove it
+        pid_file.unlink(missing_ok=True)
+        return False
+
+
+def _stop_existing_daemon() -> bool:
+    """Stop an existing daemon instance if one is running.
+
+    Reads the PID file, verifies the process is actually our daemon
+    (by checking process name), and only then terminates it.
+
+    Returns True if a daemon was stopped, False if none was running.
+    """
+    pid_file = _get_pid_file()
+    if not pid_file.exists():
+        return False
+
+    try:
+        with open(pid_file, "r") as f:
+            data = json.load(f)
+        old_pid = data.get("pid")
+        if old_pid is None:
+            pid_file.unlink(missing_ok=True)
+            return False
+
+        if not _is_pid_our_daemon(old_pid):
+            # PID exists but it's NOT our daemon — stale file, just clean up
+            pid_file.unlink(missing_ok=True)
+            return False
+
+        # Verified: this PID is our daemon. Terminate it.
+        print(f"  Stopping existing daemon (PID {old_pid})...", file=sys.stderr)
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/PID", str(old_pid), "/F"],
+                capture_output=True, timeout=10,
+            )
+        else:
+            os.kill(old_pid, signal.SIGTERM)
+            # Give it a moment to clean up
+            time.sleep(0.5)
+            try:
+                os.kill(old_pid, 0)
+                # Still alive, force kill
+                os.kill(old_pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+
+        # Clean up the PID file
+        pid_file.unlink(missing_ok=True)
+        # Wait for process to fully exit
+        time.sleep(0.5)
+        print(f"  Existing daemon stopped.", file=sys.stderr)
+        return True
+
+    except (json.JSONDecodeError, IOError, ValueError, subprocess.TimeoutExpired):
         pid_file.unlink(missing_ok=True)
         return False
 
@@ -95,7 +185,10 @@ def _acquire_lock() -> bool:
     pid_file = _get_pid_file()
     try:
         with open(pid_file, "w") as f:
-            json.dump({"pid": os.getpid()}, f)
+            json.dump({
+                "pid": os.getpid(),
+                "process_name": _DAEMON_PROCESS_NAME,
+            }, f)
 
         # Register cleanup on exit
         atexit.register(_release_lock)
@@ -258,6 +351,8 @@ def _on_hotkey_triggered(config: dict):
         fmt=fmt,
         overlay_color=overlay_color,
         overlay_opacity=overlay_opacity,
+        capture_hotkey=config.get("hotkey", "ctrl+shift+q"),
+        recapture_hotkey=config.get("recapture_hotkey", "ctrl+alt+q"),
     )
 
     if capture_result.path:
@@ -322,15 +417,18 @@ def _on_recapture_triggered(config: dict):
         print(f"  >> Recapture failed: {e}", file=sys.stderr)
 
 
-def run_daemon(hotkey_override: str = None, recapture_hotkey_override: str = None, debug: bool = False, skip_lock: bool = False):
+def run_daemon(hotkey_override: str = None, recapture_hotkey_override: str = None, debug: bool = False, replace_existing: bool = False):
     """Main daemon entry point. Uses pynput for global hotkey listening."""
     # Instance lock — prevent multiple daemons
-    if not skip_lock:
-        if not _acquire_lock():
-            print("  [!] Another claude-screenshot-daemon is already running.", file=sys.stderr)
-            print(f"      PID file: {_get_pid_file()}", file=sys.stderr)
-            print("      To force start, delete the PID file or use --force.", file=sys.stderr)
-            sys.exit(0)
+    if replace_existing:
+        # --force or --restart: safely stop the old daemon first, then start
+        _stop_existing_daemon()
+
+    if not _acquire_lock():
+        print("  [!] Another claude-screenshot-daemon is already running.", file=sys.stderr)
+        print(f"      PID file: {_get_pid_file()}", file=sys.stderr)
+        print("      Use --restart to safely replace it.", file=sys.stderr)
+        sys.exit(0)
 
     config = load_config()
     hotkey = hotkey_override or config.get("hotkey", "ctrl+shift+q")
@@ -433,6 +531,8 @@ Examples:
   claude-screenshot-daemon --set-hotkey ctrl+alt+s          Save capture hotkey to config
   claude-screenshot-daemon --set-recapture-hotkey ctrl+alt+r  Save recapture hotkey to config
   claude-screenshot-daemon --debug                          Show key presses for troubleshooting
+  claude-screenshot-daemon --restart                        Safely stop existing daemon and start fresh
+  claude-screenshot-daemon --stop                           Stop the running daemon
         """,
     )
     parser.add_argument(
@@ -467,7 +567,17 @@ Examples:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Force start even if another instance appears to be running",
+        help="Stop the existing daemon (verified by process name) and start a new one",
+    )
+    parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="Safely stop the existing daemon (verified by process name) and start fresh",
+    )
+    parser.add_argument(
+        "--stop",
+        action="store_true",
+        help="Stop the running daemon and exit",
     )
     parser.add_argument(
         "--status",
@@ -489,6 +599,14 @@ Examples:
             print("  Daemon is not running.", file=sys.stderr)
             sys.exit(1)
 
+    # --stop: safely stop the running daemon and exit
+    if args.stop:
+        if _stop_existing_daemon():
+            print("  Daemon stopped successfully.", file=sys.stderr)
+        else:
+            print("  No daemon was running.", file=sys.stderr)
+        sys.exit(0)
+
     # If --set-hotkey, save it to config first
     if args.set_hotkey:
         update_config("hotkey", args.set_hotkey)
@@ -500,7 +618,8 @@ Examples:
 
     hotkey = args.hotkey or args.set_hotkey or None
     recapture_hotkey = args.recapture_hotkey or args.set_recapture_hotkey or None
-    run_daemon(hotkey_override=hotkey, recapture_hotkey_override=recapture_hotkey, debug=args.debug, skip_lock=args.force)
+    replace_existing = args.force or args.restart
+    run_daemon(hotkey_override=hotkey, recapture_hotkey_override=recapture_hotkey, debug=args.debug, replace_existing=replace_existing)
 
 
 if __name__ == "__main__":
